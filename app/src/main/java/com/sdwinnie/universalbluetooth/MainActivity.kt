@@ -2,21 +2,22 @@
 package com.sdwinnie.universalbluetooth
 
 import android.annotation.SuppressLint
+import android.app.Activity
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothManager
 import android.content.*
 import android.net.Uri
-import android.os.Build
 import android.os.Bundle
-import android.os.PowerManager
 import android.provider.Settings
 import android.text.method.ScrollingMovementMethod
 import android.view.View
 import android.widget.Toast
+import androidx.activity.result.IntentSenderRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.LinearLayoutManager
+import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.sdwinnie.universalbluetooth.databinding.ActivityMainBinding
 import java.text.SimpleDateFormat
 import java.util.*
@@ -37,6 +38,7 @@ class MainActivity : AppCompatActivity() {
     private var currentRangeFilterMeters = 10.0
     private var isUpdatingSwitchProgrammatically = false
     private var pendingTask: PendingTask? = null
+    private var pendingCdmAddress: String? = null
     private var receiverRegistered = false
 
     private val timeFormatter = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
@@ -49,14 +51,14 @@ class MainActivity : AppCompatActivity() {
             val task = pendingTask
             pendingTask = null
             if (task != null) {
-                executePendingTask(task)
+                continueAfterPermissionsGranted(task)
             }
         } else {
             pendingTask = null
             setServiceSwitchSilently(BluetoothBackgroundService.isRunning)
             Toast.makeText(
                 this,
-                "กรุณาอนุญาตสิทธิ์บลูทูธและตำแหน่งที่ตั้งเพื่อให้ระบบตรวจจับและทำงานเบื้องหลังได้",
+                "กรุณาอนุญาตสิทธิ์อุปกรณ์ใกล้เคียง (Bluetooth) เพื่อเริ่มตรวจจับอุปกรณ์",
                 Toast.LENGTH_LONG
             ).show()
         }
@@ -74,7 +76,22 @@ class MainActivity : AppCompatActivity() {
         } else {
             pendingTask = null
             setServiceSwitchSilently(BluetoothBackgroundService.isRunning)
-            Toast.makeText(this, "ต้องเปิดบลูทูธก่อนเริ่มสแกนหรือเชื่อมต่อ", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "กรุณาเปิดบลูทูธก่อนเริ่มสแกนหรือเชื่อมต่อ", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private val companionDeviceLauncher = registerForActivityResult(
+        ActivityResultContracts.StartIntentSenderForResult()
+    ) { result ->
+        val addr = pendingCdmAddress ?: BluetoothBackgroundService.connectedAddress
+            ?: AppPrefs.getLastDeviceAddress(this)
+        if (result.resultCode == Activity.RESULT_OK && !addr.isNullOrBlank()) {
+            CompanionAssociationHelper.startPresenceObservationIfPossible(this, addr)
+            updateCompanionButtonState(addr)
+            appendLog("[CDM Security] ลงทะเบียนคู่เครื่อง $addr กับระบบ Android สำเร็จ (ปลุกอัตโนมัติในระยะ 5–10m)")
+            Toast.makeText(this, "ลงทะเบียนอุปกรณ์คู่เครื่องปลอดภัยสำเร็จ", Toast.LENGTH_SHORT).show()
+        } else {
+            updateCompanionButtonState(addr)
         }
     }
 
@@ -113,9 +130,8 @@ class MainActivity : AppCompatActivity() {
         setupListeners()
 
         binding.tvEventLog.movementMethod = ScrollingMovementMethod()
-        binding.rvDevices.itemAnimator = null // Smooth live RSSI updates without blink
+        binding.rvDevices.itemAnimator = null
 
-        // Auto-resume background service if user previously enabled it and permissions exist
         if (AppPrefs.isServiceEnabled(this) &&
             !BluetoothBackgroundService.isRunning &&
             PermissionHelper.canStartConnectedDeviceForegroundService(this)
@@ -160,11 +176,11 @@ class MainActivity : AppCompatActivity() {
 
         when (AppPrefs.getActionMode(this)) {
             AppPrefs.ACTION_MODE_MEDIA_PLAY_PAUSE -> binding.chipActionMedia.isChecked = true
-            AppPrefs.ACTION_MODE_CAMERA_SHUTTER -> binding.chipActionShutter.isChecked = true
-            AppPrefs.ACTION_MODE_SCROLL_DOWN -> binding.chipActionScrollDown.isChecked = true
-            AppPrefs.ACTION_MODE_SCROLL_UP -> binding.chipActionScrollUp.isChecked = true
-            AppPrefs.ACTION_MODE_BACK_STYLUS -> binding.chipActionBack.isChecked = true
-            else -> binding.chipActionShutter.isChecked = true
+            AppPrefs.ACTION_MODE_VOLUME_SHUTTER -> binding.chipActionVolume.isChecked = true
+            AppPrefs.ACTION_MODE_MEDIA_NEXT -> binding.chipActionNext.isChecked = true
+            AppPrefs.ACTION_MODE_MEDIA_PREVIOUS -> binding.chipActionPrev.isChecked = true
+            AppPrefs.ACTION_MODE_STYLUS_BROADCAST -> binding.chipActionStylus.isChecked = true
+            else -> binding.chipActionMedia.isChecked = true
         }
     }
 
@@ -185,22 +201,32 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        binding.btnIgnoreBatteryOpt.setOnClickListener {
-            requestBatteryOptimizationExemption()
+        binding.btnSecurityDetails.setOnClickListener {
+            showSecurityAuditDialog()
         }
 
-        binding.btnAccessibilityBridge.setOnClickListener {
-            openAccessibilitySettings()
+        binding.btnAppBatterySettings.setOnClickListener {
+            openSafeAppDetailsSettings()
+        }
+
+        binding.btnRegisterCompanion.setOnClickListener {
+            val activeAddr = BluetoothBackgroundService.connectedAddress
+                ?: AppPrefs.getLastDeviceAddress(this)
+            if (activeAddr.isNullOrBlank()) {
+                Toast.makeText(this, "กรุณาเลือกเชื่อมต่ออุปกรณ์ก่อนลงทะเบียนคู่เครื่อง", Toast.LENGTH_SHORT).show()
+            } else {
+                triggerOfficialCompanionAssociation(activeAddr)
+            }
         }
 
         binding.chipGroupActionMode.setOnCheckedStateChangeListener { _, checkedIds ->
             val mode = when {
                 checkedIds.contains(R.id.chipActionMedia) -> AppPrefs.ACTION_MODE_MEDIA_PLAY_PAUSE
-                checkedIds.contains(R.id.chipActionShutter) -> AppPrefs.ACTION_MODE_CAMERA_SHUTTER
-                checkedIds.contains(R.id.chipActionScrollDown) -> AppPrefs.ACTION_MODE_SCROLL_DOWN
-                checkedIds.contains(R.id.chipActionScrollUp) -> AppPrefs.ACTION_MODE_SCROLL_UP
-                checkedIds.contains(R.id.chipActionBack) -> AppPrefs.ACTION_MODE_BACK_STYLUS
-                else -> AppPrefs.ACTION_MODE_CAMERA_SHUTTER
+                checkedIds.contains(R.id.chipActionVolume) -> AppPrefs.ACTION_MODE_VOLUME_SHUTTER
+                checkedIds.contains(R.id.chipActionNext) -> AppPrefs.ACTION_MODE_MEDIA_NEXT
+                checkedIds.contains(R.id.chipActionPrev) -> AppPrefs.ACTION_MODE_MEDIA_PREVIOUS
+                checkedIds.contains(R.id.chipActionStylus) -> AppPrefs.ACTION_MODE_STYLUS_BROADCAST
+                else -> AppPrefs.ACTION_MODE_MEDIA_PLAY_PAUSE
             }
             AppPrefs.setActionMode(this, mode)
             appendLog("[Action] ตั้งค่าปุ่มกดเป็น: ${AppPrefs.actionModeLabel(mode)}")
@@ -209,8 +235,8 @@ class MainActivity : AppCompatActivity() {
         binding.btnTestAction.setOnClickListener {
             val report = ActionExecutor.execute(
                 context = this,
-                buttonCode = 999,
-                triggerSource = "ปุ่มทดสอบในแอป",
+                buttonCode = 1,
+                triggerSource = "ทดสอบคำสั่งในแอป",
                 deviceName = "Test Trigger"
             )
             Toast.makeText(this, report.summary, Toast.LENGTH_SHORT).show()
@@ -258,10 +284,54 @@ class MainActivity : AppCompatActivity() {
         val missing = PermissionHelper.missingPermissions(this)
         if (missing.isNotEmpty()) {
             pendingTask = task
-            requestPermissionsLauncher.launch(missing.toTypedArray())
+            if (!AppPrefs.hasAcceptedPrivacyDisclosure(this)) {
+                showTransparentPermissionRationale(missing)
+            } else {
+                requestPermissionsLauncher.launch(missing.toTypedArray())
+            }
             return
         }
 
+        continueAfterPermissionsGranted(task)
+    }
+
+    private fun showTransparentPermissionRationale(missing: List<String>) {
+        MaterialAlertDialogBuilder(this)
+            .setTitle("คำชี้แจงสิทธิ์และความปลอดภัย (มาตรฐาน Android)")
+            .setMessage(
+                "เพื่อให้แอปทำงานได้อย่างถูกต้องและปลอดภัยสูงสุด แอปขออนุญาตใช้เฉพาะสิทธิ์ที่จำเป็นดังนี้:\n\n" +
+                    "1. อุปกรณ์ใกล้เคียง (Bluetooth): ใช้สแกนหาและเชื่อมต่ออุปกรณ์บลูทูธของคุณโดยตรง\n" +
+                    "2. ตำแหน่งที่ตั้ง (Location): ระบบ Android กำหนดให้ต้องใช้เพื่อคำนวณระยะห่างสัญญาณบลูทูธ 5–10 เมตร (แอปไม่มีสิทธิ์อินเทอร์เน็ต จึงไม่สามารถส่งพิกัดของคุณออกนอกเครื่องได้ 100%)\n" +
+                    "3. การแจ้งเตือน: ใช้แสดงสถานะการทำงานเบื้องหลังอย่างโปร่งใส\n\n" +
+                    "หมายเหตุ: แอปนี้ไม่ขอสิทธิ์การช่วยเหลือพิเศษ (Accessibility) จึงไม่อ่านหน้าจอและไม่ติด 'การตั้งค่าที่จำกัด'"
+            )
+            .setCancelable(false)
+            .setPositiveButton("เข้าใจและดำเนินการต่อ") { _, _ ->
+                AppPrefs.setPrivacyDisclosureAccepted(this, true)
+                requestPermissionsLauncher.launch(missing.toTypedArray())
+            }
+            .setNegativeButton("ยกเลิก") { _, _ ->
+                pendingTask = null
+                setServiceSwitchSilently(BluetoothBackgroundService.isRunning)
+            }
+            .show()
+    }
+
+    private fun showSecurityAuditDialog() {
+        MaterialAlertDialogBuilder(this)
+            .setTitle("รายงานตรวจสอบความปลอดภัยของแอป")
+            .setMessage(
+                "• สิทธิ์อินเทอร์เน็ต (INTERNET): ไม่มี (Offline 100%)\n" +
+                    "• สิทธิ์อ่านหน้าจอ (Accessibility): ไม่มี (ปลอดภัยจากความเสี่ยงข้อมูลรั่วไหล และไม่ติดการตั้งค่าที่จำกัด)\n" +
+                    "• สิทธิ์แอบรันตอนเปิดเครื่อง (BOOT_COMPLETED): ไม่มี (ใช้ระบบ CompanionDeviceService มาตรฐาน Android 12–16 แทน)\n" +
+                    "• การเชื่อมต่อข้อมูล: เข้ารหัสระดับลิงก์ (Encrypted BLE GATT & Secure RFCOMM)\n" +
+                    "• การสำรองข้อมูลภายนอก (allowBackup): ปิดป้องกันการดึงข้อมูล"
+            )
+            .setPositiveButton("ตกลง", null)
+            .show()
+    }
+
+    private fun continueAfterPermissionsGranted(task: PendingTask) {
         if (bluetoothAdapter == null) {
             setServiceSwitchSilently(false)
             Toast.makeText(this, "อุปกรณ์นี้ไม่รองรับฮาร์ดแวร์บลูทูธ", Toast.LENGTH_LONG).show()
@@ -303,7 +373,7 @@ class MainActivity : AppCompatActivity() {
             is PendingTask.ConnectDevice -> {
                 val model = task.model
                 AppPrefs.setServiceEnabled(this, true)
-                appendLog("[Connect] สั่งเชื่อมต่อตรงไปยัง ${model.name} (${model.address})...")
+                appendLog("[Connect] เชื่อมต่อตรงแบบเข้ารหัสไปยัง ${model.name} (${model.address})...")
 
                 val intent = Intent(this, BluetoothBackgroundService::class.java).apply {
                     action = BluetoothBackgroundService.ACTION_CONNECT
@@ -318,7 +388,48 @@ class MainActivity : AppCompatActivity() {
                 binding.tvConnectedBadge.setTextColor(ContextCompat.getColor(this, R.color.signal_medium))
                 binding.tvConnectedName.text = model.name
                 binding.tvConnectedDetails.text = "กำลังเปิดช่องสัญญาณกับ ${model.address}..."
+                updateCompanionButtonState(model.address)
             }
+        }
+    }
+
+    private fun triggerOfficialCompanionAssociation(address: String) {
+        pendingCdmAddress = address
+        CompanionAssociationHelper.requestAssociation(
+            context = this,
+            address = address,
+            onLaunchDialog = { intentSender ->
+                try {
+                    val req = IntentSenderRequest.Builder(intentSender).build()
+                    companionDeviceLauncher.launch(req)
+                } catch (e: Exception) {
+                    appendLog("[CDM] เปิดหน้าต่างยืนยันไม่สำเร็จ: ${e.localizedMessage}")
+                }
+            },
+            onAssociated = { mac ->
+                updateCompanionButtonState(mac)
+                appendLog("[CDM Security] ลงทะเบียนอุปกรณ์คู่เครื่อง $mac สำเร็จ")
+            },
+            onError = { errMsg ->
+                appendLog("[CDM] $errMsg")
+                Toast.makeText(this, errMsg, Toast.LENGTH_SHORT).show()
+            }
+        )
+    }
+
+    private fun updateCompanionButtonState(address: String?) {
+        if (!CompanionAssociationHelper.isSupported(this) || address.isNullOrBlank()) {
+            binding.btnRegisterCompanion.visibility = View.GONE
+            return
+        }
+        binding.btnRegisterCompanion.visibility = View.VISIBLE
+        val associated = CompanionAssociationHelper.isDeviceAssociated(this, address)
+        if (associated) {
+            binding.btnRegisterCompanion.text = "✓ ลงทะเบียนคู่เครื่องกับระบบ Android แล้ว (ปลุกอัตโนมัติ 24/7)"
+            binding.btnRegisterCompanion.isEnabled = false
+        } else {
+            binding.btnRegisterCompanion.text = "ลงทะเบียนอุปกรณ์คู่เครื่องกับระบบ Android (ปลุกอัตโนมัติ 24/7)"
+            binding.btnRegisterCompanion.isEnabled = true
         }
     }
 
@@ -335,7 +446,7 @@ class MainActivity : AppCompatActivity() {
             return
         }
         try {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
                 startForegroundService(intent)
             } else {
                 startService(intent)
@@ -398,14 +509,16 @@ class MainActivity : AppCompatActivity() {
                 binding.tvConnectedBadge.setTextColor(ContextCompat.getColor(this, R.color.signal_medium))
                 if (deviceName.isNotBlank()) binding.tvConnectedName.text = deviceName
                 binding.tvConnectedDetails.text = message
+                updateCompanionButtonState(AppPrefs.getLastDeviceAddress(this))
             }
 
             "CONNECTED", "SERVICES_READY", "BATTERY" -> {
                 binding.cardConnectedDevice.visibility = View.VISIBLE
-                binding.tvConnectedBadge.text = "เชื่อมต่อแล้ว (Active 24/7)"
+                binding.tvConnectedBadge.text = "เชื่อมต่อแล้ว (Encrypted Active 24/7)"
                 binding.tvConnectedBadge.setTextColor(ContextCompat.getColor(this, R.color.connected_green))
                 if (deviceName.isNotBlank()) binding.tvConnectedName.text = deviceName
                 binding.tvConnectedDetails.text = message
+                updateCompanionButtonState(BluetoothBackgroundService.connectedAddress)
                 refreshDeviceListFromService()
             }
 
@@ -428,11 +541,12 @@ class MainActivity : AppCompatActivity() {
         val addr = BluetoothBackgroundService.connectedAddress
         if (addr != null) {
             binding.cardConnectedDevice.visibility = View.VISIBLE
-            binding.tvConnectedBadge.text = "เชื่อมต่อแล้ว (Active 24/7)"
+            binding.tvConnectedBadge.text = "เชื่อมต่อแล้ว (Encrypted Active 24/7)"
             binding.tvConnectedBadge.setTextColor(ContextCompat.getColor(this, R.color.connected_green))
             binding.tvConnectedName.text = BluetoothBackgroundService.connectedName ?: addr
             binding.tvConnectedDetails.text = BluetoothBackgroundService.connectedStatusDetail
                 .ifBlank { "พร้อมรับสัญญาณปุ่มกดเบื้องหลัง" }
+            updateCompanionButtonState(addr)
         } else {
             binding.cardConnectedDevice.visibility = View.GONE
         }
@@ -454,7 +568,7 @@ class MainActivity : AppCompatActivity() {
             binding.tvServiceStatusTitle.text = "บริการเบื้องหลัง: ทำงานอยู่ (Active 24/7)"
             binding.tvServiceStatusTitle.setTextColor(ContextCompat.getColor(this, R.color.connected_green))
             binding.tvServiceStatusDesc.text =
-                "เรดาร์และการเชื่อมต่อตรงทำงานต่อเนื่อง แม้ปิดหน้าจอหรือสลับไปใช้แอปอื่น"
+                "เรดาร์และการเชื่อมต่อตรงแบบเข้ารหัสทำงานต่อเนื่อง แม้ปิดหน้าจอหรือสลับแอป"
         } else {
             binding.tvServiceStatusTitle.text = "บริการเบื้องหลัง: ยังไม่ได้เริ่มทำงาน"
             binding.tvServiceStatusTitle.setTextColor(ContextCompat.getColor(this, R.color.disconnected_red))
@@ -473,51 +587,19 @@ class MainActivity : AppCompatActivity() {
     private fun refreshSystemStatusBadges() {
         val locationOn = PermissionHelper.isLocationServiceEnabled(this)
         binding.cardLocationWarning.visibility = if (locationOn) View.GONE else View.VISIBLE
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager
-            val exempted = pm?.isIgnoringBatteryOptimizations(packageName) == true
-            binding.btnIgnoreBatteryOpt.text = if (exempted) {
-                "✓ ปลดล็อกแบตเตอรี่ HyperOS เรียบร้อยแล้ว"
-            } else {
-                "ปลดล็อกแบตเตอรี่ HyperOS (ป้องกันระบบสั่งปิด)"
-            }
-        }
-
-        val a11yEnabled = UniversalAccessibilityService.isEnabledInSettings(this)
-        binding.btnAccessibilityBridge.text = if (a11yEnabled) {
-            "✓ เปิดสิทธิ์ควบคุมข้ามแอป (Accessibility) แล้ว"
-        } else {
-            "เปิดสิทธิ์ควบคุมข้ามแอป (เลื่อนหน้าจอ / รับปุ่ม HID)"
-        }
     }
 
-    private fun requestBatteryOptimizationExemption() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager
-            if (pm?.isIgnoringBatteryOptimizations(packageName) != true) {
-                try {
-                    val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
-                        data = Uri.parse("package:$packageName")
-                    }
-                    startActivity(intent)
-                } catch (_: Exception) {
-                    startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
-                }
-            } else {
-                Toast.makeText(this, "ปลดล็อกการประหยัดแบตเตอรี่เรียบร้อยแล้ว", Toast.LENGTH_SHORT).show()
-            }
-        }
-    }
-
-    private fun openAccessibilitySettings() {
+    private fun openSafeAppDetailsSettings() {
         Toast.makeText(
             this,
-            "เลือก 'แอปที่ดาวน์โหลด' -> 'Universal BT Companion' แล้วกดเปิดใช้งาน",
+            "เลือกเมนู 'แบตเตอรี่' -> ตั้งเป็น 'ไม่จำกัด (No restrictions)' เพื่อให้ทำงานเบื้องหลังบน HyperOS ได้เต็มที่",
             Toast.LENGTH_LONG
         ).show()
         try {
-            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+            val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                data = Uri.fromParts("package", packageName, null)
+            }
+            startActivity(intent)
         } catch (_: Exception) {
         }
     }

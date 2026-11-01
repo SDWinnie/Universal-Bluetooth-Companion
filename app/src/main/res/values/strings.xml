@@ -14,5 +14,4 @@
     <string name="range_5m">ระยะใกล้ (5 เมตร)</string>
     <string name="range_10m">ระยะกลาง (10 เมตร)</string>
     <string name="range_all">ทุกระยะ (All)</string>
-    <string name="accessibility_service_description">ใช้สำหรับรับคำสั่งปุ่มกดจากปากกาสไตลัส/รีโมตบลูทูธในพื้นหลัง และสั่งเลื่อนหน้าจอ ถ่ายรูป หรือควบคุมมีเดียข้ามแอปอย่างปลอดภัย (ไม่อ่านข้อมูลหน้าจอส่วนตัว)</string>
 </resources>

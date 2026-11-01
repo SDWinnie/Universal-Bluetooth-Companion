@@ -46,7 +46,6 @@ class BluetoothGattManager(
         val BATTERY_LEVEL_UUID: UUID = UUID.fromString("00002a19-0000-1000-8000-00805f9b34fb")
         val HID_SERVICE_UUID: UUID = UUID.fromString("00001812-0000-1000-8000-00805f9b34fb")
         val SPP_UUID: UUID = UUID.fromString("00001101-0000-1000-8000-00805f9b34fb")
-        private const val PROFILE_HID_HOST = 4
         private const val OP_TIMEOUT_MS = 2500L
     }
 
@@ -270,10 +269,10 @@ class BluetoothGattManager(
                 }
             }
 
-            // 2. Request OS Profile Connection (HID Input Device / Audio) if supported
-            val profileConnected = tryConnectSystemProfiles(adapter, device)
+            // 2. Check official OS profile connection state (100% public SDK APIs, zero reflection)
+            val profileConnected = checkOfficialProfileConnected(adapter, device)
 
-            // 3. Attempt RFCOMM / SPP data socket (for serial clickers, gamepads, microcontrollers, custom boards)
+            // 3. Attempt Encrypted RFCOMM / SPP data socket (link-level Bluetooth encryption enforced)
             try {
                 device.fetchUuidsWithSdp()
             } catch (_: Exception) {
@@ -287,33 +286,31 @@ class BluetoothGattManager(
             var openedSocket: BluetoothSocket? = null
             for (uuid in candidateUuids) {
                 if (!isActive) return@launch
-                openedSocket = tryOpenRfcommSocket(device, uuid, secure = true)
-                    ?: tryOpenRfcommSocket(device, uuid, secure = false)
+                openedSocket = tryOpenEncryptedRfcommSocket(device, uuid)
                 if (openedSocket != null) break
             }
 
             if (openedSocket != null) {
                 classicSocket = openedSocket
                 isConnectedInternal = true
-                activeProtocol = "Classic RFCOMM/SPP"
+                activeProtocol = "Encrypted RFCOMM/SPP"
                 withContext(Dispatchers.Main) {
                     listener.onConnectionStateChanged(
                         BluetoothProfile.STATE_CONNECTED,
                         activeProtocol,
-                        "เชื่อมต่อสายข้อมูล Classic RFCOMM สำเร็จ พร้อมรับคำสั่ง!"
+                        "เชื่อมต่อช่องสัญญาณเข้ารหัส Classic RFCOMM สำเร็จ พร้อมรับคำสั่ง!"
                     )
                     listener.onServicesDiscovered(candidateUuids.size, 1)
                 }
                 readRfcommLoop(openedSocket.inputStream, device)
             } else if (profileConnected || device.bondState == BluetoothDevice.BOND_BONDED) {
-                // Device is paired/connected as a system HID/Audio peripheral!
                 isConnectedInternal = true
-                activeProtocol = "Classic HID / System Profile"
+                activeProtocol = "Bonded System Profile"
                 withContext(Dispatchers.Main) {
                     listener.onConnectionStateChanged(
                         BluetoothProfile.STATE_CONNECTED,
                         activeProtocol,
-                        "จับคู่และเชื่อมต่อโพรไฟล์ระบบสำเร็จ (พร้อมรับปุ่มกดผ่าน Background Bridge)"
+                        "จับคู่เข้ารหัสกับระบบสำเร็จ พร้อมรับปุ่มมีเดียและทำงานเบื้องหลัง"
                     )
                     listener.onServicesDiscovered(candidateUuids.size, 0)
                 }
@@ -331,14 +328,10 @@ class BluetoothGattManager(
         }
     }
 
-    private fun tryOpenRfcommSocket(device: BluetoothDevice, uuid: UUID, secure: Boolean): BluetoothSocket? {
+    private fun tryOpenEncryptedRfcommSocket(device: BluetoothDevice, uuid: UUID): BluetoothSocket? {
         var sock: BluetoothSocket? = null
         return try {
-            sock = if (secure) {
-                device.createRfcommSocketToServiceRecord(uuid)
-            } else {
-                device.createInsecureRfcommSocketToServiceRecord(uuid)
-            }
+            sock = device.createRfcommSocketToServiceRecord(uuid)
             sock.connect()
             sock
         } catch (_: Exception) {
@@ -379,30 +372,49 @@ class BluetoothGattManager(
         }
     }
 
-    private fun tryConnectSystemProfiles(adapter: BluetoothAdapter?, device: BluetoothDevice): Boolean {
+    private suspend fun checkOfficialProfileConnected(adapter: BluetoothAdapter?, device: BluetoothDevice): Boolean {
         if (adapter == null) return false
-        var requested = false
-        val profiles = listOf(PROFILE_HID_HOST, BluetoothProfile.A2DP, BluetoothProfile.HEADSET)
+        val deferred = CompletableDeferred<Boolean>()
+        val profiles = listOf(BluetoothProfile.A2DP, BluetoothProfile.HEADSET)
+        var remaining = profiles.size
+        var foundConnected = false
+
         for (profileId in profiles) {
-            try {
+            val requested = try {
                 adapter.getProfileProxy(context, object : BluetoothProfile.ServiceListener {
                     override fun onServiceConnected(profile: Int, proxy: BluetoothProfile) {
                         try {
-                            val connectMethod = proxy.javaClass.getMethod("connect", BluetoothDevice::class.java)
-                            connectMethod.invoke(proxy, device)
+                            if (proxy.getConnectionState(device) == BluetoothProfile.STATE_CONNECTED) {
+                                foundConnected = true
+                            }
                         } catch (_: Exception) {
                         } finally {
                             adapter.closeProfileProxy(profile, proxy)
+                            synchronized(deferred) {
+                                remaining--
+                                if (remaining <= 0 && !deferred.isCompleted) {
+                                    deferred.complete(foundConnected)
+                                }
+                            }
                         }
                     }
 
                     override fun onServiceDisconnected(profile: Int) {}
                 }, profileId)
-                requested = true
             } catch (_: Exception) {
+                false
+            }
+            if (!requested) {
+                synchronized(deferred) {
+                    remaining--
+                    if (remaining <= 0 && !deferred.isCompleted) {
+                        deferred.complete(foundConnected)
+                    }
+                }
             }
         }
-        return requested && device.bondState == BluetoothDevice.BOND_BONDED
+
+        return withTimeoutOrNull(800L) { deferred.await() } ?: foundConnected
     }
 
     private val gattCallback = object : BluetoothGattCallback() {

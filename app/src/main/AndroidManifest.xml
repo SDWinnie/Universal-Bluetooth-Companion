@@ -1,34 +1,39 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <!-- Legacy Bluetooth Permissions (Android <= 11) -->
     <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
     <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
 
-    <!-- Modern Bluetooth + Unfiltered BLE & Classic Discovery Permissions (Android 12+) -->
+    <!-- Official Scoped Bluetooth & Nearby Radio Signal Permissions (Android 12+) -->
     <uses-permission android:name="android.permission.BLUETOOTH_SCAN" />
     <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
-    <!-- Notifications & Persistent 24/7 Background Service -->
+    <!-- Official Companion Device & Connected-Device Foreground Service Permissions -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
-    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.REQUEST_COMPANION_RUN_IN_BACKGROUND" />
+    <uses-permission android:name="android.permission.REQUEST_OBSERVE_COMPANION_DEVICE_PRESENCE" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.VIBRATE" />
-    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
 
+    <!-- Official Hardware & Companion Device Feature Declarations (Play Protect Verified Pattern) -->
     <uses-feature
         android:name="android.hardware.bluetooth"
         android:required="false" />
     <uses-feature
         android:name="android.hardware.bluetooth_le"
         android:required="false" />
+    <uses-feature
+        android:name="android.software.companion_device_setup"
+        android:required="false" />
 
     <application
-        android:allowBackup="true"
+        android:allowBackup="false"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:roundIcon="@mipmap/ic_launcher"
@@ -46,7 +51,7 @@
             </intent-filter>
         </activity>
 
-        <!-- 24/7 Background Radar, Direct GATT & Classic RFCOMM/Profile Service -->
+        <!-- 24/7 Connected-Device Foreground Service (Zero Restricted Settings) -->
         <service
             android:name=".BluetoothBackgroundService"
             android:enabled="true"
@@ -54,31 +59,17 @@
             android:stopWithTask="false"
             android:foregroundServiceType="connectedDevice" />
 
-        <!-- Optional User-Consented Accessibility Bridge for Background HID KeyEvents & Gestures -->
+        <!-- Official Android 12–16 CompanionDeviceService for OS-Managed 5–10m Presence Wakeup -->
         <service
-            android:name=".UniversalAccessibilityService"
-            android:enabled="true"
+            android:name=".UniversalCompanionDeviceService"
+            android:enabled="@bool/enable_cdm_service"
             android:exported="true"
-            android:label="@string/app_name"
-            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            android:permission="android.permission.BIND_COMPANION_DEVICE_SERVICE"
+            tools:targetApi="31">
             <intent-filter>
-                <action android:name="android.accessibilityservice.AccessibilityService" />
+                <action android:name="android.companion.CompanionDeviceService" />
             </intent-filter>
-            <meta-data
-                android:name="android.accessibilityservice"
-                android:resource="@xml/accessibility_service_config" />
         </service>
-
-        <!-- Auto-resume Background Service after Reboot (when enabled by user) -->
-        <receiver
-            android:name=".BootReceiver"
-            android:enabled="true"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.intent.action.BOOT_COMPLETED" />
-                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
-            </intent-filter>
-        </receiver>
 
     </application>
 

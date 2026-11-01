@@ -517,11 +517,42 @@ class BluetoothBackgroundService : Service(), BluetoothGattManager.GattEventList
         } catch (_: Exception) {
         }
 
-        // 2. Check OS-bonded devices (highlight active ones in 5–10m radar; keep offline paired ones in All Range)
+        // 2. Check active Audio / Headset profile connected devices via 100% public BluetoothProfile API
+        val publicProfiles = listOf(BluetoothProfile.A2DP, BluetoothProfile.HEADSET)
+        for (profileId in publicProfiles) {
+            try {
+                adapter.getProfileProxy(this, object : BluetoothProfile.ServiceListener {
+                    override fun onServiceConnected(profile: Int, proxy: BluetoothProfile) {
+                        try {
+                            proxy.connectedDevices?.forEach { dev ->
+                                upsertDiscoveredDevice(
+                                    device = dev,
+                                    rawName = safeDeviceName(dev),
+                                    rssi = -58,
+                                    txPower = null,
+                                    isConnectable = true,
+                                    manufacturerIds = emptyList(),
+                                    serviceUuids = emptyList(),
+                                    majorClass = safeMajorClass(dev),
+                                    forceSystemConnected = true
+                                )
+                            }
+                        } catch (_: Exception) {
+                        } finally {
+                            adapter.closeProfileProxy(profile, proxy)
+                        }
+                    }
+
+                    override fun onServiceDisconnected(profile: Int) {}
+                }, profileId)
+            } catch (_: Exception) {
+            }
+        }
+
+        // 3. Check OS-bonded devices (highlight active ones in 5–10m radar; keep offline paired ones in All Range)
         try {
             adapter.bondedDevices?.forEach { dev ->
                 val sysConnected = gattConnectedSet.contains(dev.address) ||
-                    isDeviceConnectedToOs(dev) ||
                     (dev.address == connectedAddress)
 
                 val existing = discoveredDevicesMap[dev.address]
@@ -695,6 +726,7 @@ class BluetoothBackgroundService : Service(), BluetoothGattManager.GattEventList
 
             lastConnectedDeviceName = resolvedName
             AppPrefs.setLastDevice(this, address, resolvedName)
+            CompanionAssociationHelper.startPresenceObservationIfPossible(this, address)
             updateNotification("กำลังเชื่อมต่อ: $resolvedName...")
             gattManager?.connect(device, autoReconnect = true)
         } catch (e: Exception) {
@@ -895,15 +927,6 @@ class BluetoothBackgroundService : Service(), BluetoothGattManager.GattEventList
         } catch (_: Exception) {
             null
         }
-
-    private fun isDeviceConnectedToOs(device: BluetoothDevice): Boolean {
-        return try {
-            val method = device.javaClass.getMethod("isConnected")
-            (method.invoke(device) as? Boolean) == true
-        } catch (_: Exception) {
-            false
-        }
-    }
 
     private fun broadcastUiUpdate(
         type: String,

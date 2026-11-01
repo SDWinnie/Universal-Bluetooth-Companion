@@ -13,8 +13,9 @@ import android.util.Log
 import android.view.KeyEvent
 
 /**
- * Executes real cross-app background actions when a Bluetooth stylus, shutter,
- * clicker, or GATT/RFCOMM button is pressed.
+ * 100% Play-Protect-Compliant Action Executor:
+ * Uses ONLY official Android AudioManager Media/Volume APIs and Companion Broadcasts.
+ * Requires ZERO AccessibilityService and ZERO Restricted Settings.
  */
 object ActionExecutor {
 
@@ -35,7 +36,7 @@ object ActionExecutor {
 
         val mode = AppPrefs.getActionMode(context)
 
-        // 1. Always emit explicit stylus/button broadcast for companion note apps & automation tools
+        // 1. Emit companion stylus/remote button broadcast for drawing/note apps (e.g. SaberPlus Universal)
         val broadcastIntent = Intent(BluetoothBackgroundService.BROADCAST_STYLUS_BUTTON).apply {
             putExtra(BluetoothBackgroundService.EXTRA_BUTTON_CODE, buttonCode)
             putExtra(BluetoothBackgroundService.EXTRA_DEVICE_NAME, deviceName)
@@ -44,19 +45,30 @@ object ActionExecutor {
         }
         context.sendBroadcast(broadcastIntent)
 
-        // 2. Execute user-selected cross-app action
+        // 2. Execute selected official system action
         val report = when (mode) {
-            AppPrefs.ACTION_MODE_MEDIA_PLAY_PAUSE -> dispatchMediaPlayPause(context)
-            AppPrefs.ACTION_MODE_CAMERA_SHUTTER -> executeCameraOrVolumeShutter(context)
-            AppPrefs.ACTION_MODE_SCROLL_DOWN -> executeScroll(scrollDown = true)
-            AppPrefs.ACTION_MODE_SCROLL_UP -> executeScroll(scrollDown = false)
-            AppPrefs.ACTION_MODE_BACK_STYLUS -> executeBackAndStylusBridge()
-            else -> executeCameraOrVolumeShutter(context)
+            AppPrefs.ACTION_MODE_MEDIA_PLAY_PAUSE ->
+                dispatchMediaKey(context, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, "สั่งเล่น/หยุดมีเดีย (Play/Pause) สำเร็จ")
+
+            AppPrefs.ACTION_MODE_MEDIA_NEXT ->
+                dispatchMediaKey(context, KeyEvent.KEYCODE_MEDIA_NEXT, "สั่งเลื่อนเพลง/สไลด์ถัดไป (Next) สำเร็จ")
+
+            AppPrefs.ACTION_MODE_MEDIA_PREVIOUS ->
+                dispatchMediaKey(context, KeyEvent.KEYCODE_MEDIA_PREVIOUS, "สั่งย้อนเพลง/สไลด์ก่อนหน้า (Previous) สำเร็จ")
+
+            AppPrefs.ACTION_MODE_VOLUME_SHUTTER ->
+                executeVolumeShutterSignal(context)
+
+            AppPrefs.ACTION_MODE_STYLUS_BROADCAST ->
+                ExecutionReport(true, "ส่งคำสั่งปุ่มปากกา (#$buttonCode) ไปยังแอปวาดเขียน/โน้ตสำเร็จ")
+
+            else ->
+                dispatchMediaKey(context, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, "สั่งเล่น/หยุดมีเดีย (Play/Pause) สำเร็จ")
         }
 
         Log.d(TAG, "Executed mode=$mode source=$triggerSource code=$buttonCode -> ${report.summary}")
 
-        // 3. Notify UI live monitor if MainActivity is open
+        // 3. Notify in-app Live Event Monitor (restricted strictly to our own package)
         val uiIntent = Intent(BluetoothBackgroundService.BROADCAST_EVENT).apply {
             putExtra(BluetoothBackgroundService.EXTRA_EVENT_TYPE, "ACTION")
             putExtra(
@@ -72,73 +84,28 @@ object ActionExecutor {
         return report
     }
 
-    private fun dispatchMediaPlayPause(context: Context): ExecutionReport {
+    private fun dispatchMediaKey(context: Context, keyCode: Int, successMsg: String): ExecutionReport {
         val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
-            ?: return ExecutionReport(false, "ไม่พบระบบเสียง (AudioManager)")
+            ?: return ExecutionReport(false, "ไม่พบระบบจัดการเสียง (AudioManager)")
 
         val now = SystemClock.uptimeMillis()
-        val downEvent = KeyEvent(now, now, KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, 0)
-        val upEvent = KeyEvent(now, now + 20, KeyEvent.ACTION_UP, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE, 0)
+        val downEvent = KeyEvent(now, now, KeyEvent.ACTION_DOWN, keyCode, 0)
+        val upEvent = KeyEvent(now, now + 20, KeyEvent.ACTION_UP, keyCode, 0)
         audioManager.dispatchMediaKeyEvent(downEvent)
         audioManager.dispatchMediaKeyEvent(upEvent)
-        return ExecutionReport(true, "สั่งเล่น/หยุดมีเดีย (Play/Pause) สำเร็จ")
+        return ExecutionReport(true, successMsg)
     }
 
-    private fun executeCameraOrVolumeShutter(context: Context): ExecutionReport {
-        val a11y = UniversalAccessibilityService.instance
-        if (a11y != null && a11y.isCameraAppInForeground()) {
-            val tapped = a11y.performCameraShutterTap()
-            if (tapped) {
-                return ExecutionReport(true, "สั่งลั่นชัตเตอร์กล้องถ่ายรูปสำเร็จ")
-            }
-        }
-
+    private fun executeVolumeShutterSignal(context: Context): ExecutionReport {
         val audioManager = context.getSystemService(Context.AUDIO_SERVICE) as? AudioManager
-        if (audioManager != null) {
-            audioManager.adjustStreamVolume(
-                AudioManager.STREAM_MUSIC,
-                AudioManager.ADJUST_RAISE,
-                AudioManager.FLAG_SHOW_UI
-            )
-            return ExecutionReport(
-                true,
-                if (a11y == null) {
-                    "ส่งสัญญาณปุ่มชัตเตอร์/เพิ่มเสียงสำเร็จ (เปิด Accessibility หากต้องการแตะชัตเตอร์ในแอปกล้อง)"
-                } else {
-                    "ส่งสัญญาณปุ่มชัตเตอร์/เพิ่มเสียงสำเร็จ"
-                }
-            )
-        }
-        return ExecutionReport(false, "ไม่สามารถส่งคำสั่งชัตเตอร์ได้")
-    }
+            ?: return ExecutionReport(false, "ไม่พบระบบจัดการเสียง (AudioManager)")
 
-    private fun executeScroll(scrollDown: Boolean): ExecutionReport {
-        val a11y = UniversalAccessibilityService.instance
-            ?: return ExecutionReport(
-                false,
-                "ต้องเปิดสิทธิ์ 'ควบคุมข้ามแอป (Accessibility)' ก่อนจึงจะสั่งเลื่อนหน้าจออัตโนมัติได้"
-            )
-
-        val ok = a11y.performVerticalScroll(scrollDown = scrollDown)
-        val label = if (scrollDown) "เลื่อนหน้าจอลง (หน้าถัดไป)" else "เลื่อนหน้าจอขึ้น (หน้าก่อน)"
-        return if (ok) {
-            ExecutionReport(true, "สั่ง$label สำเร็จ")
-        } else {
-            ExecutionReport(false, "สั่ง$label ไม่สำเร็จ")
-        }
-    }
-
-    private fun executeBackAndStylusBridge(): ExecutionReport {
-        val a11y = UniversalAccessibilityService.instance
-        return if (a11y != null) {
-            val ok = a11y.performBackAction()
-            ExecutionReport(ok, "สั่งย้อนกลับ (Back) + ส่งสัญญาณปุ่มปากกาสำเร็จ")
-        } else {
-            ExecutionReport(
-                true,
-                "ส่ง Broadcast ปุ่มปากกาแล้ว (เปิด Accessibility หากต้องการสั่งปุ่มย้อนกลับข้ามแอป)"
-            )
-        }
+        audioManager.adjustStreamVolume(
+            AudioManager.STREAM_MUSIC,
+            AudioManager.ADJUST_RAISE,
+            AudioManager.FLAG_SHOW_UI
+        )
+        return ExecutionReport(true, "ส่งสัญญาณเพิ่มเสียง / ปุ่มชัตเตอร์ Volume+ สำเร็จ")
     }
 
     private fun triggerHapticClick(context: Context) {

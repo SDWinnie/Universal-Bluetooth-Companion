@@ -9,7 +9,8 @@ import android.os.Build
 import androidx.core.content.ContextCompat
 
 /**
- * Persistent preferences and permission helpers for 24/7 operation.
+ * Persistent preferences and permission helpers designed for strict
+ * Google Play Protect & Android 13–16 security compliance.
  */
 object AppPrefs {
     private const val PREFS_NAME = "universal_bt_prefs"
@@ -18,13 +19,14 @@ object AppPrefs {
     private const val KEY_LAST_NAME = "last_device_name"
     private const val KEY_RANGE_METERS = "range_filter_meters"
     private const val KEY_ACTION_MODE = "button_action_mode"
-    private const val KEY_INTERCEPT_HID_KEYS = "intercept_hid_keys"
+    private const val KEY_MEDIA_SESSION_CAPTURE = "media_session_capture"
+    private const val KEY_PRIVACY_DISCLOSURE_ACCEPTED = "privacy_disclosure_accepted"
 
     const val ACTION_MODE_MEDIA_PLAY_PAUSE = 0
-    const val ACTION_MODE_CAMERA_SHUTTER = 1
-    const val ACTION_MODE_SCROLL_DOWN = 2
-    const val ACTION_MODE_SCROLL_UP = 3
-    const val ACTION_MODE_BACK_STYLUS = 4
+    const val ACTION_MODE_VOLUME_SHUTTER = 1
+    const val ACTION_MODE_MEDIA_NEXT = 2
+    const val ACTION_MODE_MEDIA_PREVIOUS = 3
+    const val ACTION_MODE_STYLUS_BROADCAST = 4
 
     fun isServiceEnabled(context: Context): Boolean =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
@@ -62,29 +64,38 @@ object AppPrefs {
 
     fun getActionMode(context: Context): Int =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .getInt(KEY_ACTION_MODE, ACTION_MODE_CAMERA_SHUTTER)
+            .getInt(KEY_ACTION_MODE, ACTION_MODE_MEDIA_PLAY_PAUSE)
 
     fun setActionMode(context: Context, mode: Int) {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             .edit().putInt(KEY_ACTION_MODE, mode).apply()
     }
 
-    fun isInterceptHidKeysEnabled(context: Context): Boolean =
+    fun isMediaSessionCaptureEnabled(context: Context): Boolean =
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .getBoolean(KEY_INTERCEPT_HID_KEYS, true)
+            .getBoolean(KEY_MEDIA_SESSION_CAPTURE, true)
 
-    fun setInterceptHidKeysEnabled(context: Context, enabled: Boolean) {
+    fun setMediaSessionCaptureEnabled(context: Context, enabled: Boolean) {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-            .edit().putBoolean(KEY_INTERCEPT_HID_KEYS, enabled).apply()
+            .edit().putBoolean(KEY_MEDIA_SESSION_CAPTURE, enabled).apply()
+    }
+
+    fun hasAcceptedPrivacyDisclosure(context: Context): Boolean =
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .getBoolean(KEY_PRIVACY_DISCLOSURE_ACCEPTED, false)
+
+    fun setPrivacyDisclosureAccepted(context: Context, accepted: Boolean) {
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            .edit().putBoolean(KEY_PRIVACY_DISCLOSURE_ACCEPTED, accepted).apply()
     }
 
     fun actionModeLabel(mode: Int): String = when (mode) {
-        ACTION_MODE_MEDIA_PLAY_PAUSE -> "เล่น/หยุดมีเดีย (Play/Pause)"
-        ACTION_MODE_CAMERA_SHUTTER -> "กดชัตเตอร์กล้อง / Volume"
-        ACTION_MODE_SCROLL_DOWN -> "เลื่อนหน้าจอลง (TikTok/PDF)"
-        ACTION_MODE_SCROLL_UP -> "เลื่อนหน้าจอขึ้น (หน้าก่อน)"
-        ACTION_MODE_BACK_STYLUS -> "ย้อนกลับ (Back) + ส่งเข้าแอปโน้ต"
-        else -> "กดชัตเตอร์กล้อง / Volume"
+        ACTION_MODE_MEDIA_PLAY_PAUSE -> "เล่น/หยุดเพลงและวิดีโอ (Play/Pause)"
+        ACTION_MODE_VOLUME_SHUTTER -> "เพิ่มเสียง / สัญญาณชัตเตอร์ (Volume+)"
+        ACTION_MODE_MEDIA_NEXT -> "เพลงถัดไป / สไลด์ถัดไป (Next)"
+        ACTION_MODE_MEDIA_PREVIOUS -> "เพลงก่อนหน้า / สไลด์ก่อนหน้า (Prev)"
+        ACTION_MODE_STYLUS_BROADCAST -> "ส่งคำสั่งปุ่มปากกาเข้าแอปโน้ต (Stylus Bridge)"
+        else -> "เล่น/หยุดเพลงและวิดีโอ (Play/Pause)"
     }
 }
 
@@ -96,7 +107,6 @@ object PermissionHelper {
             list.add(Manifest.permission.BLUETOOTH_SCAN)
             list.add(Manifest.permission.BLUETOOTH_CONNECT)
         }
-        // Required across Android versions for Classic Bluetooth discovery & unfiltered BLE beacons
         list.add(Manifest.permission.ACCESS_FINE_LOCATION)
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -110,11 +120,6 @@ object PermissionHelper {
             ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED
         }
 
-    /**
-     * Checks specifically whether Android 14+ FOREGROUND_SERVICE_CONNECTED_DEVICE
-     * prerequisites (BLUETOOTH_CONNECT or BLUETOOTH_SCAN) are granted so startForeground()
-     * can NEVER throw a SecurityException.
-     */
     fun canStartConnectedDeviceForegroundService(context: Context): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return true
         val hasConnect = ContextCompat.checkSelfPermission(

@@ -43,7 +43,7 @@
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="Universal BT Companion v2.0"
+                        android:text="Universal BT Companion v2.1"
                         android:textColor="@color/text_primary"
                         android:textSize="19sp"
                         android:textStyle="bold" />
@@ -51,8 +51,8 @@
                     <TextView
                         android:layout_width="wrap_content"
                         android:layout_height="wrap_content"
-                        android:text="BLE + Classic 5–10m • เชื่อมตรงไม่ง้อระบบ • เบื้องหลัง 24/7"
-                        android:textColor="@color/text_secondary"
+                        android:text="Play Protect Safe • ไม่ติดการตั้งค่าที่จำกัด • ระยะ 5–10m"
+                        android:textColor="@color/accent"
                         android:textSize="11.5sp" />
                 </LinearLayout>
 
@@ -62,7 +62,7 @@
                     android:layout_height="wrap_content" />
             </LinearLayout>
 
-            <!-- Warning Banner if GPS/Location Service is OFF (Required by Android OS for full BT scanning) -->
+            <!-- Warning Banner if GPS/Location Service is OFF -->
             <com.google.android.material.card.MaterialCardView
                 android:id="@+id/cardLocationWarning"
                 android:layout_width="match_parent"
@@ -86,7 +86,7 @@
                         android:layout_width="0dp"
                         android:layout_height="wrap_content"
                         android:layout_weight="1"
-                        android:text="ตำแหน่ง (GPS) ปิดอยู่: Android อาจซ่อนอุปกรณ์บลูทูธบางรุ่นในระยะ 5–10m"
+                        android:text="ตำแหน่ง (GPS) ปิดอยู่: Android อาจซ่อนสัญญาณบลูทูธบางอุปกรณ์ในระยะ 5–10 เมตร"
                         android:textColor="@color/signal_medium"
                         android:textSize="12sp" />
 
@@ -102,7 +102,7 @@
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
 
-            <!-- Card 1: Background Service, Battery & Privacy-Safe Cross-App Bridge -->
+            <!-- Card 1: Play Protect Security Shield & 24/7 Service Status -->
             <com.google.android.material.card.MaterialCardView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
@@ -137,35 +137,48 @@
                         android:textColor="@color/text_secondary"
                         android:textSize="12sp" />
 
+                    <TextView
+                        android:layout_width="match_parent"
+                        android:layout_height="wrap_content"
+                        android:layout_marginTop="8dp"
+                        android:background="#14261C"
+                        android:padding="10dp"
+                        android:text="สถาปัตยกรรมความปลอดภัยสูง (Play Protect Friendly):\n• ไม่มีสิทธิ์อินเทอร์เน็ต (Offline 100% ข้อมูลไม่ส่งออกนอกเครื่อง)\n• ไม่ใช้สิทธิ์การช่วยเหลือพิเศษ (ไม่ติดการตั้งค่าที่จำกัดของ Android)\n• ใช้ระบบ CompanionDeviceManager มาตรฐานศูนย์ Google Android"
+                        android:textColor="@color/connected_green"
+                        android:textSize="11.5sp" />
+
                     <LinearLayout
                         android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_marginTop="10dp"
-                        android:orientation="vertical">
+                        android:layout_marginTop="8dp"
+                        android:orientation="horizontal">
 
                         <com.google.android.material.button.MaterialButton
-                            android:id="@+id/btnIgnoreBatteryOpt"
+                            android:id="@+id/btnSecurityDetails"
                             style="@style/Widget.Material3.Button.OutlinedButton"
-                            android:layout_width="match_parent"
+                            android:layout_width="0dp"
                             android:layout_height="wrap_content"
-                            android:text="ปลดล็อกแบตเตอรี่ HyperOS (ป้องกันระบบสั่งปิด)"
-                            android:textSize="12sp"
+                            android:layout_marginEnd="4dp"
+                            android:layout_weight="1"
+                            android:text="ตรวจสอบสิทธิ์แอป"
+                            android:textSize="11.5sp"
                             app:cornerRadius="8dp" />
 
                         <com.google.android.material.button.MaterialButton
-                            android:id="@+id/btnAccessibilityBridge"
+                            android:id="@+id/btnAppBatterySettings"
                             style="@style/Widget.Material3.Button.OutlinedButton"
-                            android:layout_width="match_parent"
+                            android:layout_width="0dp"
                             android:layout_height="wrap_content"
-                            android:layout_marginTop="4dp"
-                            android:text="เปิดสิทธิ์ควบคุมข้ามแอป (เลื่อนหน้าจอ / รับปุ่ม HID)"
-                            android:textSize="12sp"
+                            android:layout_marginStart="4dp"
+                            android:layout_weight="1"
+                            android:text="ตั้งค่าแบต HyperOS"
+                            android:textSize="11.5sp"
                             app:cornerRadius="8dp" />
                     </LinearLayout>
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
 
-            <!-- Card 2: Connected Device Status -->
+            <!-- Card 2: Connected Device & Official Android CDM Association -->
             <com.google.android.material.card.MaterialCardView
                 android:id="@+id/cardConnectedDevice"
                 android:layout_width="match_parent"
@@ -181,56 +194,72 @@
                 <LinearLayout
                     android:layout_width="match_parent"
                     android:layout_height="wrap_content"
-                    android:gravity="center_vertical"
-                    android:orientation="horizontal"
+                    android:orientation="vertical"
                     android:padding="14dp">
 
                     <LinearLayout
-                        android:layout_width="0dp"
+                        android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:layout_weight="1"
-                        android:orientation="vertical">
+                        android:gravity="center_vertical"
+                        android:orientation="horizontal">
 
-                        <TextView
-                            android:id="@+id/tvConnectedBadge"
+                        <LinearLayout
+                            android:layout_width="0dp"
+                            android:layout_height="wrap_content"
+                            android:layout_weight="1"
+                            android:orientation="vertical">
+
+                            <TextView
+                                android:id="@+id/tvConnectedBadge"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:text="เชื่อมต่ออุปกรณ์แล้ว (Encrypted Link)"
+                                android:textColor="@color/connected_green"
+                                android:textSize="12.5sp"
+                                android:textStyle="bold" />
+
+                            <TextView
+                                android:id="@+id/tvConnectedName"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="2dp"
+                                android:text="Stylus Pen / Remote"
+                                android:textColor="@color/text_primary"
+                                android:textSize="16sp"
+                                android:textStyle="bold" />
+
+                            <TextView
+                                android:id="@+id/tvConnectedDetails"
+                                android:layout_width="wrap_content"
+                                android:layout_height="wrap_content"
+                                android:layout_marginTop="2dp"
+                                android:text="พร้อมส่งคำสั่งไปยังแอปอื่นๆ เบื้องหลัง"
+                                android:textColor="@color/text_secondary"
+                                android:textSize="12sp" />
+                        </LinearLayout>
+
+                        <com.google.android.material.button.MaterialButton
+                            android:id="@+id/btnDisconnect"
+                            style="@style/Widget.Material3.Button.TextButton"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="เชื่อมต่ออุปกรณ์แล้ว (Active Link)"
-                            android:textColor="@color/connected_green"
-                            android:textSize="12.5sp"
-                            android:textStyle="bold" />
-
-                        <TextView
-                            android:id="@+id/tvConnectedName"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:layout_marginTop="2dp"
-                            android:text="Stylus Pen / Remote"
-                            android:textColor="@color/text_primary"
-                            android:textSize="16sp"
-                            android:textStyle="bold" />
-
-                        <TextView
-                            android:id="@+id/tvConnectedDetails"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:layout_marginTop="2dp"
-                            android:text="พร้อมส่งคำสั่งไปยังแอปอื่นๆ เบื้องหลัง"
-                            android:textColor="@color/text_secondary"
-                            android:textSize="12sp" />
+                            android:text="ตัดเชื่อม"
+                            android:textColor="@color/disconnected_red" />
                     </LinearLayout>
 
                     <com.google.android.material.button.MaterialButton
-                        android:id="@+id/btnDisconnect"
-                        style="@style/Widget.Material3.Button.TextButton"
-                        android:layout_width="wrap_content"
+                        android:id="@+id/btnRegisterCompanion"
+                        style="@style/Widget.Material3.Button.TonalButton"
+                        android:layout_width="match_parent"
                         android:layout_height="wrap_content"
-                        android:text="ตัดเชื่อม"
-                        android:textColor="@color/disconnected_red" />
+                        android:layout_marginTop="8dp"
+                        android:text="ลงทะเบียนอุปกรณ์คู่เครื่องกับระบบ Android (ปลุกอัตโนมัติ 24/7)"
+                        android:textSize="12sp"
+                        app:cornerRadius="8dp" />
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
 
-            <!-- Card 3: Background Action Mode Selector -->
+            <!-- Card 3: Official Non-Restricted Background Action Mode Selector -->
             <com.google.android.material.card.MaterialCardView
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
@@ -257,7 +286,7 @@
                             android:layout_width="0dp"
                             android:layout_height="wrap_content"
                             android:layout_weight="1"
-                            android:text="คำสั่งเมื่อกดปุ่มปากกา / รีโมตบลูทูธ"
+                            android:text="คำสั่งเมื่อกดปุ่มอุปกรณ์บลูทูธ"
                             android:textColor="@color/text_primary"
                             android:textSize="14.5sp"
                             android:textStyle="bold" />
@@ -282,13 +311,6 @@
                         app:singleSelection="true">
 
                         <com.google.android.material.chip.Chip
-                            android:id="@+id/chipActionShutter"
-                            style="@style/Widget.Material3.Chip.Filter"
-                            android:layout_width="wrap_content"
-                            android:layout_height="wrap_content"
-                            android:text="ชัตเตอร์กล้อง / เสียง" />
-
-                        <com.google.android.material.chip.Chip
                             android:id="@+id/chipActionMedia"
                             style="@style/Widget.Material3.Chip.Filter"
                             android:layout_width="wrap_content"
@@ -296,25 +318,32 @@
                             android:text="เล่น/หยุดเพลง-วิดีโอ" />
 
                         <com.google.android.material.chip.Chip
-                            android:id="@+id/chipActionScrollDown"
+                            android:id="@+id/chipActionVolume"
                             style="@style/Widget.Material3.Chip.Filter"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="เลื่อนจอลง (TikTok/PDF)" />
+                            android:text="เพิ่มเสียง / ชัตเตอร์ Volume+" />
 
                         <com.google.android.material.chip.Chip
-                            android:id="@+id/chipActionScrollUp"
+                            android:id="@+id/chipActionNext"
                             style="@style/Widget.Material3.Chip.Filter"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="เลื่อนจอขึ้น" />
+                            android:text="เพลง/สไลด์ถัดไป (Next)" />
 
                         <com.google.android.material.chip.Chip
-                            android:id="@+id/chipActionBack"
+                            android:id="@+id/chipActionPrev"
                             style="@style/Widget.Material3.Chip.Filter"
                             android:layout_width="wrap_content"
                             android:layout_height="wrap_content"
-                            android:text="ย้อนกลับ + แอปโน้ต" />
+                            android:text="เพลง/สไลด์ก่อนหน้า (Prev)" />
+
+                        <com.google.android.material.chip.Chip
+                            android:id="@+id/chipActionStylus"
+                            style="@style/Widget.Material3.Chip.Filter"
+                            android:layout_width="wrap_content"
+                            android:layout_height="wrap_content"
+                            android:text="ส่งปุ่มเข้าแอปโน้ต/ปากกา" />
                     </com.google.android.material.chip.ChipGroup>
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
@@ -416,7 +445,7 @@
                 android:layout_height="wrap_content"
                 android:layout_marginHorizontal="16dp"
                 android:layout_marginTop="8dp"
-                android:text="อุปกรณ์ในระยะ 10 เมตร: 0 เครื่อง (ตรวจพบทั้งหมด 0 เครื่อง)"
+                android:text="อุปกรณ์ในระยะ 10 เมตร: 0 เครื่อง (ตรวจพบรอบตัว 0 เครื่อง)"
                 android:textColor="@color/text_secondary"
                 android:textSize="13sp"
                 android:textStyle="bold" />
@@ -480,7 +509,7 @@
                         android:fontFamily="monospace"
                         android:padding="8dp"
                         android:scrollbars="vertical"
-                        android:text="[System] Universal BT Companion v2.0 พร้อมตรวจจับและเชื่อมต่ออุปกรณ์ทุกชนิด..."
+                        android:text="[System] Universal BT Companion v2.1 (Play Protect Safe) พร้อมใช้งาน..."
                         android:textColor="@color/accent"
                         android:textSize="11sp" />
                 </LinearLayout>
