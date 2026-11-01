@@ -1,18 +1,13 @@
 // 🤖 Generated wholely or partially with Google Antigravity
 package com.sdwinnie.universalbluetooth
 
-import android.Manifest
 import android.annotation.SuppressLint
 import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothManager
-import android.bluetooth.le.*
 import android.content.*
-import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
 import android.os.PowerManager
 import android.provider.Settings
 import android.text.method.ScrollingMovementMethod
@@ -29,54 +24,75 @@ import java.util.*
 @SuppressLint("MissingPermission")
 class MainActivity : AppCompatActivity() {
 
+    private sealed class PendingTask {
+        object StartServiceAndRadar : PendingTask()
+        object StartRadarOnly : PendingTask()
+        data class ConnectDevice(val model: BluetoothDeviceModel) : PendingTask()
+    }
+
     private lateinit var binding: ActivityMainBinding
     private var bluetoothAdapter: BluetoothAdapter? = null
-    private var bleScanner: BluetoothLeScanner? = null
-    private var isScanning = false
-    private val mainHandler = Handler(Looper.getMainLooper())
-
-    private val discoveredDevices = Collections.synchronizedMap(LinkedHashMap<String, BluetoothDeviceModel>())
     private lateinit var deviceAdapter: DeviceAdapter
-    private var currentRangeFilterMeters = 10.0 // Default 10 meters
+
+    private var currentRangeFilterMeters = 10.0
+    private var isUpdatingSwitchProgrammatically = false
+    private var pendingTask: PendingTask? = null
+    private var receiverRegistered = false
 
     private val timeFormatter = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
 
-    // Permissions launcher
     private val requestPermissionsLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
-    ) { permissions ->
-        val allGranted = permissions.entries.all { it.value }
-        if (allGranted) {
-            startBleScan()
+    ) { _ ->
+        refreshSystemStatusBadges()
+        if (PermissionHelper.canStartConnectedDeviceForegroundService(this)) {
+            val task = pendingTask
+            pendingTask = null
+            if (task != null) {
+                executePendingTask(task)
+            }
         } else {
-            Toast.makeText(this, "กรุณาอนุญาตสิทธิ์บลูทูธเพื่อเริ่มตรวจจับอุปกรณ์", Toast.LENGTH_LONG).show()
+            pendingTask = null
+            setServiceSwitchSilently(BluetoothBackgroundService.isRunning)
+            Toast.makeText(
+                this,
+                "กรุณาอนุญาตสิทธิ์บลูทูธและตำแหน่งที่ตั้งเพื่อให้ระบบตรวจจับและทำงานเบื้องหลังได้",
+                Toast.LENGTH_LONG
+            ).show()
         }
     }
 
-    // Broadcast receiver from background service
-    private val serviceEventReceiver = object : BroadcastReceiver() {
+    private val enableBluetoothLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) {
+        if (bluetoothAdapter?.isEnabled == true) {
+            val task = pendingTask
+            pendingTask = null
+            if (task != null) {
+                executePendingTask(task)
+            }
+        } else {
+            pendingTask = null
+            setServiceSwitchSilently(BluetoothBackgroundService.isRunning)
+            Toast.makeText(this, "ต้องเปิดบลูทูธก่อนเริ่มสแกนหรือเชื่อมต่อ", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private val serviceReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
-            if (intent?.action == BluetoothBackgroundService.BROADCAST_EVENT) {
-                val eventType = intent.getStringExtra(BluetoothBackgroundService.EXTRA_EVENT_TYPE) ?: ""
-                val message = intent.getStringExtra(BluetoothBackgroundService.EXTRA_MESSAGE) ?: ""
-                val deviceName = intent.getStringExtra(BluetoothBackgroundService.EXTRA_DEVICE_NAME) ?: ""
-                val buttonCode = intent.getIntExtra(BluetoothBackgroundService.EXTRA_BUTTON_CODE, 0)
-                val hex = intent.getStringExtra(BluetoothBackgroundService.EXTRA_RAW_HEX) ?: ""
+            when (intent?.action) {
+                BluetoothBackgroundService.BROADCAST_DEVICES_UPDATED -> {
+                    refreshDeviceListFromService()
+                    syncRadarUiState()
+                }
 
-                appendLog("[$eventType] $message")
+                BluetoothBackgroundService.BROADCAST_EVENT -> {
+                    val eventType = intent.getStringExtra(BluetoothBackgroundService.EXTRA_EVENT_TYPE).orEmpty()
+                    val message = intent.getStringExtra(BluetoothBackgroundService.EXTRA_MESSAGE).orEmpty()
+                    val deviceName = intent.getStringExtra(BluetoothBackgroundService.EXTRA_DEVICE_NAME).orEmpty()
 
-                when (eventType) {
-                    "CONNECTED", "SERVICES_READY" -> {
-                        binding.cardConnectedDevice.visibility = View.VISIBLE
-                        binding.tvConnectedName.text = deviceName
-                        binding.tvConnectedDetails.text = message
-                    }
-                    "DISCONNECTED" -> {
-                        binding.cardConnectedDevice.visibility = View.GONE
-                    }
-                    "DATA" -> {
-                        binding.tvConnectedDetails.text = "ปุ่มล่าสุด: $buttonCode (HEX: $hex)"
-                    }
+                    appendLog("[$eventType] $message")
+                    syncServiceAndConnectionUi(eventType, deviceName, message)
                 }
             }
         }
@@ -87,275 +103,453 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        val btManager = getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
-        bluetoothAdapter = btManager.adapter
-        bleScanner = bluetoothAdapter?.bluetoothLeScanner
+        val btManager = getSystemService(Context.BLUETOOTH_SERVICE) as? BluetoothManager
+        bluetoothAdapter = btManager?.adapter
+
+        currentRangeFilterMeters = AppPrefs.getRangeMeters(this)
 
         setupRecyclerView()
+        restoreSavedFilterAndActionChips()
         setupListeners()
-        updateServiceCardUi(isServiceRunning())
 
         binding.tvEventLog.movementMethod = ScrollingMovementMethod()
+        binding.rvDevices.itemAnimator = null // Smooth live RSSI updates without blink
+
+        // Auto-resume background service if user previously enabled it and permissions exist
+        if (AppPrefs.isServiceEnabled(this) &&
+            !BluetoothBackgroundService.isRunning &&
+            PermissionHelper.canStartConnectedDeviceForegroundService(this)
+        ) {
+            sendCommandToService(BluetoothBackgroundService.ACTION_START_SERVICE)
+        }
     }
 
     override fun onStart() {
         super.onStart()
-        val filter = IntentFilter(BluetoothBackgroundService.BROADCAST_EVENT)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerReceiver(serviceEventReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
-        } else {
-            registerReceiver(serviceEventReceiver, filter)
-        }
+        registerServiceReceiver()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        refreshSystemStatusBadges()
+        updateServiceCardUi(BluetoothBackgroundService.isRunning)
+        syncRadarUiState()
+        syncConnectedCardFromServiceSnapshot()
+        refreshDeviceListFromService()
     }
 
     override fun onStop() {
+        unregisterServiceReceiver()
         super.onStop()
-        unregisterReceiver(serviceEventReceiver)
     }
 
     private fun setupRecyclerView() {
         deviceAdapter = DeviceAdapter { selectedModel ->
-            connectToDevice(selectedModel)
+            ensureReadyAndExecute(PendingTask.ConnectDevice(selectedModel))
         }
         binding.rvDevices.layoutManager = LinearLayoutManager(this)
         binding.rvDevices.adapter = deviceAdapter
     }
 
+    private fun restoreSavedFilterAndActionChips() {
+        when (currentRangeFilterMeters) {
+            5.0 -> binding.chip5m.isChecked = true
+            10.0 -> binding.chip10m.isChecked = true
+            else -> binding.chipAll.isChecked = true
+        }
+
+        when (AppPrefs.getActionMode(this)) {
+            AppPrefs.ACTION_MODE_MEDIA_PLAY_PAUSE -> binding.chipActionMedia.isChecked = true
+            AppPrefs.ACTION_MODE_CAMERA_SHUTTER -> binding.chipActionShutter.isChecked = true
+            AppPrefs.ACTION_MODE_SCROLL_DOWN -> binding.chipActionScrollDown.isChecked = true
+            AppPrefs.ACTION_MODE_SCROLL_UP -> binding.chipActionScrollUp.isChecked = true
+            AppPrefs.ACTION_MODE_BACK_STYLUS -> binding.chipActionBack.isChecked = true
+            else -> binding.chipActionShutter.isChecked = true
+        }
+    }
+
     private fun setupListeners() {
-        // Background Service Toggle
         binding.switchBackgroundService.setOnCheckedChangeListener { _, isChecked ->
+            if (isUpdatingSwitchProgrammatically) return@setOnCheckedChangeListener
             if (isChecked) {
-                startBackgroundService()
+                ensureReadyAndExecute(PendingTask.StartServiceAndRadar)
             } else {
                 stopBackgroundService()
             }
         }
 
-        // Distance Filter Chips
+        binding.btnEnableLocation.setOnClickListener {
+            try {
+                startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+            } catch (_: Exception) {
+            }
+        }
+
+        binding.btnIgnoreBatteryOpt.setOnClickListener {
+            requestBatteryOptimizationExemption()
+        }
+
+        binding.btnAccessibilityBridge.setOnClickListener {
+            openAccessibilitySettings()
+        }
+
+        binding.chipGroupActionMode.setOnCheckedStateChangeListener { _, checkedIds ->
+            val mode = when {
+                checkedIds.contains(R.id.chipActionMedia) -> AppPrefs.ACTION_MODE_MEDIA_PLAY_PAUSE
+                checkedIds.contains(R.id.chipActionShutter) -> AppPrefs.ACTION_MODE_CAMERA_SHUTTER
+                checkedIds.contains(R.id.chipActionScrollDown) -> AppPrefs.ACTION_MODE_SCROLL_DOWN
+                checkedIds.contains(R.id.chipActionScrollUp) -> AppPrefs.ACTION_MODE_SCROLL_UP
+                checkedIds.contains(R.id.chipActionBack) -> AppPrefs.ACTION_MODE_BACK_STYLUS
+                else -> AppPrefs.ACTION_MODE_CAMERA_SHUTTER
+            }
+            AppPrefs.setActionMode(this, mode)
+            appendLog("[Action] ตั้งค่าปุ่มกดเป็น: ${AppPrefs.actionModeLabel(mode)}")
+        }
+
+        binding.btnTestAction.setOnClickListener {
+            val report = ActionExecutor.execute(
+                context = this,
+                buttonCode = 999,
+                triggerSource = "ปุ่มทดสอบในแอป",
+                deviceName = "Test Trigger"
+            )
+            Toast.makeText(this, report.summary, Toast.LENGTH_SHORT).show()
+        }
+
         binding.chipGroupDistance.setOnCheckedStateChangeListener { _, checkedIds ->
             currentRangeFilterMeters = when {
                 checkedIds.contains(R.id.chip5m) -> 5.0
                 checkedIds.contains(R.id.chip10m) -> 10.0
-                else -> 0.0 // All range
+                else -> 0.0
             }
-            refreshFilteredList()
+            AppPrefs.setRangeMeters(this, currentRangeFilterMeters)
+            refreshDeviceListFromService()
         }
 
-        // Scan button
         binding.btnToggleScan.setOnClickListener {
-            if (isScanning) {
-                stopBleScan()
+            if (BluetoothBackgroundService.isRadarScanning) {
+                sendCommandToService(BluetoothBackgroundService.ACTION_STOP_RADAR)
+                binding.btnToggleScan.text = getString(R.string.btn_scan)
+                binding.progressScan.visibility = View.GONE
             } else {
-                checkPermissionsAndScan()
+                BluetoothBackgroundService.clearDiscoveredDevices()
+                refreshDeviceListFromService()
+                ensureReadyAndExecute(PendingTask.StartRadarOnly)
             }
         }
 
-        // Disconnect button
         binding.btnDisconnect.setOnClickListener {
-            val intent = Intent(this, BluetoothBackgroundService::class.java).apply {
-                action = BluetoothBackgroundService.ACTION_DISCONNECT
+            if (BluetoothBackgroundService.isRunning) {
+                val intent = Intent(this, BluetoothBackgroundService::class.java).apply {
+                    action = BluetoothBackgroundService.ACTION_DISCONNECT
+                }
+                startService(intent)
             }
-            startService(intent)
             binding.cardConnectedDevice.visibility = View.GONE
+            refreshDeviceListFromService()
         }
 
-        // Clear log
         binding.btnClearLog.setOnClickListener {
             binding.tvEventLog.text = ""
         }
-
-        // Battery optimization exemption helper
-        binding.btnIgnoreBatteryOpt.setOnClickListener {
-            requestBatteryOptimizationExemption()
-        }
     }
 
-    private fun checkPermissionsAndScan() {
-        if (bluetoothAdapter == null || !bluetoothAdapter!!.isEnabled) {
-            Toast.makeText(this, "กรุณาเปิดบลูทูธก่อนเริ่มค้นหา", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        val requiredPermissions = mutableListOf<String>()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            requiredPermissions.add(Manifest.permission.BLUETOOTH_SCAN)
-            requiredPermissions.add(Manifest.permission.BLUETOOTH_CONNECT)
-        } else {
-            requiredPermissions.add(Manifest.permission.ACCESS_FINE_LOCATION)
-        }
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            requiredPermissions.add(Manifest.permission.POST_NOTIFICATIONS)
-        }
-
-        val missing = requiredPermissions.filter {
-            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
-        }
-
+    private fun ensureReadyAndExecute(task: PendingTask) {
+        val missing = PermissionHelper.missingPermissions(this)
         if (missing.isNotEmpty()) {
+            pendingTask = task
             requestPermissionsLauncher.launch(missing.toTypedArray())
-        } else {
-            startBleScan()
-        }
-    }
-
-    private fun startBleScan() {
-        if (isScanning) return
-        bleScanner = bluetoothAdapter?.bluetoothLeScanner
-        if (bleScanner == null) {
-            Toast.makeText(this, "ไม่สามารถเข้าถึงตัวสแกนบลูทูธได้", Toast.LENGTH_SHORT).show()
             return
         }
 
-        discoveredDevices.clear()
-        refreshFilteredList()
-
-        val settings = ScanSettings.Builder()
-            .setScanMode(ScanSettings.SCAN_MODE_LOW_LATENCY)
-            .setReportDelay(0)
-            .build()
-
-        try {
-            bleScanner?.startScan(null, settings, bleScanCallback)
-            isScanning = true
-            binding.btnToggleScan.text = getString(R.string.btn_stop_scan)
-            binding.progressScan.visibility = View.VISIBLE
-            appendLog("[Radar] เริ่มการสแกนความถี่สูงในระยะที่กำหนด...")
-        } catch (e: Exception) {
-            appendLog("[Scan Error] ${e.message}")
+        if (bluetoothAdapter == null) {
+            setServiceSwitchSilently(false)
+            Toast.makeText(this, "อุปกรณ์นี้ไม่รองรับฮาร์ดแวร์บลูทูธ", Toast.LENGTH_LONG).show()
+            return
         }
-    }
 
-    private fun stopBleScan() {
-        if (!isScanning) return
-        try {
-            bleScanner?.stopScan(bleScanCallback)
-        } catch (e: Exception) {
-            // Ignore
-        }
-        isScanning = false
-        binding.btnToggleScan.text = getString(R.string.btn_scan)
-        binding.progressScan.visibility = View.GONE
-        appendLog("[Radar] หยุดการสแกนแล้ว")
-    }
-
-    private val bleScanCallback = object : ScanCallback() {
-        override fun onScanResult(callbackType: Int, result: ScanResult?) {
-            val device = result?.device ?: return
-            val name = result.scanRecord?.deviceName ?: device.name ?: "Unknown"
-            val address = device.address ?: return
-            val rssi = result.rssi
-
-            val isNew = !discoveredDevices.containsKey(address)
-            val model = discoveredDevices.getOrPut(address) {
-                BluetoothDeviceModel(device, name, address, rssi)
+        if (bluetoothAdapter?.isEnabled != true) {
+            pendingTask = task
+            try {
+                enableBluetoothLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
+            } catch (_: Exception) {
+                Toast.makeText(this, "กรุณาเปิดบลูทูธในแถบตั้งค่าด่วน", Toast.LENGTH_LONG).show()
             }
-            model.rssi = rssi
-            model.lastSeenMs = System.currentTimeMillis()
+            return
+        }
 
-            if (isNew) {
-                mainHandler.post { refreshFilteredList() }
+        executePendingTask(task)
+    }
+
+    private fun executePendingTask(task: PendingTask) {
+        when (task) {
+            is PendingTask.StartServiceAndRadar -> {
+                AppPrefs.setServiceEnabled(this, true)
+                sendCommandToService(BluetoothBackgroundService.ACTION_START_SERVICE)
+                updateServiceCardUi(true)
+                binding.btnToggleScan.text = getString(R.string.btn_stop_scan)
+                binding.progressScan.visibility = View.VISIBLE
+                appendLog("[Service] เริ่มบริการเบื้องหลัง 24/7 + เรดาร์ตรวจจับรอบทิศ")
+            }
+
+            is PendingTask.StartRadarOnly -> {
+                AppPrefs.setServiceEnabled(this, true)
+                sendCommandToService(BluetoothBackgroundService.ACTION_START_RADAR)
+                updateServiceCardUi(true)
+                binding.btnToggleScan.text = getString(R.string.btn_stop_scan)
+                binding.progressScan.visibility = View.VISIBLE
+            }
+
+            is PendingTask.ConnectDevice -> {
+                val model = task.model
+                AppPrefs.setServiceEnabled(this, true)
+                appendLog("[Connect] สั่งเชื่อมต่อตรงไปยัง ${model.name} (${model.address})...")
+
+                val intent = Intent(this, BluetoothBackgroundService::class.java).apply {
+                    action = BluetoothBackgroundService.ACTION_CONNECT
+                    putExtra(BluetoothBackgroundService.EXTRA_DEVICE_ADDRESS, model.address)
+                    putExtra(BluetoothBackgroundService.EXTRA_DEVICE_NAME, model.name)
+                }
+                startServiceForegroundSafe(intent)
+                updateServiceCardUi(true)
+
+                binding.cardConnectedDevice.visibility = View.VISIBLE
+                binding.tvConnectedBadge.text = "กำลังเชื่อมต่ออุปกรณ์..."
+                binding.tvConnectedBadge.setTextColor(ContextCompat.getColor(this, R.color.signal_medium))
+                binding.tvConnectedName.text = model.name
+                binding.tvConnectedDetails.text = "กำลังเปิดช่องสัญญาณกับ ${model.address}..."
             }
         }
-
-        override fun onScanFailed(errorCode: Int) {
-            appendLog("[Scan Failed] ข้อผิดพลาดรหัส $errorCode")
-            stopBleScan()
-        }
     }
 
-    private fun refreshFilteredList() {
-        val filtered = discoveredDevices.values.filter { model ->
-            model.isWithinDistance(currentRangeFilterMeters)
-        }.sortedByDescending { it.rssi }
-
-        deviceAdapter.updateList(filtered)
-        binding.tvDeviceListHeader.text = "อุปกรณ์ที่ตรวจพบ (${filtered.size} เครื่อง):"
+    private fun sendCommandToService(actionStr: String) {
+        val intent = Intent(this, BluetoothBackgroundService::class.java).apply {
+            action = actionStr
+        }
+        startServiceForegroundSafe(intent)
     }
 
-    private fun connectToDevice(model: BluetoothDeviceModel) {
-        stopBleScan()
-        appendLog("[Connect] กำลังเริ่มเชื่อมต่อกับ ${model.name} (${model.address})...")
-
-        // Ensure background service is running and pass the target address
-        val serviceIntent = Intent(this, BluetoothBackgroundService::class.java).apply {
-            action = BluetoothBackgroundService.ACTION_CONNECT
-            putExtra(BluetoothBackgroundService.EXTRA_DEVICE_ADDRESS, model.address)
+    private fun startServiceForegroundSafe(intent: Intent) {
+        if (!PermissionHelper.canStartConnectedDeviceForegroundService(this)) {
+            Toast.makeText(this, "กรุณาอนุญาตสิทธิ์บลูทูธก่อนใช้งาน", Toast.LENGTH_SHORT).show()
+            return
         }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(serviceIntent)
-        } else {
-            startService(serviceIntent)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                startForegroundService(intent)
+            } else {
+                startService(intent)
+            }
+        } catch (e: Exception) {
+            appendLog("[Error] เริ่ม Service ไม่สำเร็จ: ${e.localizedMessage}")
         }
-
-        binding.switchBackgroundService.isChecked = true
-        updateServiceCardUi(true)
-    }
-
-    private fun startBackgroundService() {
-        val serviceIntent = Intent(this, BluetoothBackgroundService::class.java).apply {
-            action = BluetoothBackgroundService.ACTION_START_SERVICE
-        }
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(serviceIntent)
-        } else {
-            startService(serviceIntent)
-        }
-        updateServiceCardUi(true)
-        appendLog("[Service] เริ่มต้นบริการเบื้องหลังเรียบร้อย (Foreground Mode)")
     }
 
     private fun stopBackgroundService() {
-        val serviceIntent = Intent(this, BluetoothBackgroundService::class.java).apply {
-            action = BluetoothBackgroundService.ACTION_STOP_SERVICE
+        AppPrefs.setServiceEnabled(this, false)
+        try {
+            val stopIntent = Intent(this, BluetoothBackgroundService::class.java).apply {
+                action = BluetoothBackgroundService.ACTION_STOP_SERVICE
+            }
+            startService(stopIntent)
+        } catch (_: Exception) {
         }
-        startService(serviceIntent)
         updateServiceCardUi(false)
+        binding.btnToggleScan.text = getString(R.string.btn_scan)
+        binding.progressScan.visibility = View.GONE
         binding.cardConnectedDevice.visibility = View.GONE
-        appendLog("[Service] หยุดบริการเบื้องหลังแล้ว")
+        appendLog("[Service] หยุดการทำงานเบื้องหลังแล้ว")
+    }
+
+    private fun refreshDeviceListFromService() {
+        val allDevices = BluetoothBackgroundService.getDiscoveredDevicesSnapshot()
+        val liveCount = allDevices.count { it.rssi > -97 || it.isConnected }
+
+        val filtered = allDevices.filter { model ->
+            if (currentRangeFilterMeters > 0.0 && model.rssi <= -97 && !model.isConnected) {
+                false
+            } else {
+                model.isWithinDistance(currentRangeFilterMeters)
+            }
+        }.sortedWith(
+            compareByDescending<BluetoothDeviceModel> { it.isConnected }
+                .thenByDescending { it.rssi }
+        )
+
+        deviceAdapter.updateList(filtered)
+
+        val rangeLabel = when (currentRangeFilterMeters) {
+            5.0 -> "ระยะ 5 เมตร"
+            10.0 -> "ระยะ 10 เมตร"
+            else -> "ทุกระยะ"
+        }
+        binding.tvDeviceListHeader.text =
+            "อุปกรณ์ใน$rangeLabel: ${filtered.size} เครื่อง (ตรวจพบรอบตัว $liveCount เครื่อง)"
+    }
+
+    private fun syncServiceAndConnectionUi(eventType: String, deviceName: String, message: String) {
+        updateServiceCardUi(BluetoothBackgroundService.isRunning)
+        syncRadarUiState()
+
+        when (eventType) {
+            "CONNECTING" -> {
+                binding.cardConnectedDevice.visibility = View.VISIBLE
+                binding.tvConnectedBadge.text = "กำลังเชื่อมต่อ..."
+                binding.tvConnectedBadge.setTextColor(ContextCompat.getColor(this, R.color.signal_medium))
+                if (deviceName.isNotBlank()) binding.tvConnectedName.text = deviceName
+                binding.tvConnectedDetails.text = message
+            }
+
+            "CONNECTED", "SERVICES_READY", "BATTERY" -> {
+                binding.cardConnectedDevice.visibility = View.VISIBLE
+                binding.tvConnectedBadge.text = "เชื่อมต่อแล้ว (Active 24/7)"
+                binding.tvConnectedBadge.setTextColor(ContextCompat.getColor(this, R.color.connected_green))
+                if (deviceName.isNotBlank()) binding.tvConnectedName.text = deviceName
+                binding.tvConnectedDetails.text = message
+                refreshDeviceListFromService()
+            }
+
+            "ACTION" -> {
+                if (BluetoothBackgroundService.connectedAddress != null) {
+                    binding.tvConnectedDetails.text = message
+                }
+            }
+
+            "DISCONNECTED" -> {
+                if (BluetoothBackgroundService.connectedAddress == null) {
+                    binding.cardConnectedDevice.visibility = View.GONE
+                }
+                refreshDeviceListFromService()
+            }
+        }
+    }
+
+    private fun syncConnectedCardFromServiceSnapshot() {
+        val addr = BluetoothBackgroundService.connectedAddress
+        if (addr != null) {
+            binding.cardConnectedDevice.visibility = View.VISIBLE
+            binding.tvConnectedBadge.text = "เชื่อมต่อแล้ว (Active 24/7)"
+            binding.tvConnectedBadge.setTextColor(ContextCompat.getColor(this, R.color.connected_green))
+            binding.tvConnectedName.text = BluetoothBackgroundService.connectedName ?: addr
+            binding.tvConnectedDetails.text = BluetoothBackgroundService.connectedStatusDetail
+                .ifBlank { "พร้อมรับสัญญาณปุ่มกดเบื้องหลัง" }
+        } else {
+            binding.cardConnectedDevice.visibility = View.GONE
+        }
+    }
+
+    private fun syncRadarUiState() {
+        if (BluetoothBackgroundService.isRadarScanning) {
+            binding.btnToggleScan.text = getString(R.string.btn_stop_scan)
+            binding.progressScan.visibility = View.VISIBLE
+        } else {
+            binding.btnToggleScan.text = getString(R.string.btn_scan)
+            binding.progressScan.visibility = View.GONE
+        }
     }
 
     private fun updateServiceCardUi(running: Boolean) {
+        setServiceSwitchSilently(running)
         if (running) {
             binding.tvServiceStatusTitle.text = "บริการเบื้องหลัง: ทำงานอยู่ (Active 24/7)"
             binding.tvServiceStatusTitle.setTextColor(ContextCompat.getColor(this, R.color.connected_green))
-            binding.tvServiceStatusDesc.text = "พร้อมตรวจจับและเชื่อมต่ออุปกรณ์บลูทูธ แม้ปิดหน้าจอหรือสลับแอป"
-            binding.switchBackgroundService.isChecked = true
+            binding.tvServiceStatusDesc.text =
+                "เรดาร์และการเชื่อมต่อตรงทำงานต่อเนื่อง แม้ปิดหน้าจอหรือสลับไปใช้แอปอื่น"
         } else {
             binding.tvServiceStatusTitle.text = "บริการเบื้องหลัง: ยังไม่ได้เริ่มทำงาน"
             binding.tvServiceStatusTitle.setTextColor(ContextCompat.getColor(this, R.color.disconnected_red))
-            binding.tvServiceStatusDesc.text = "เปิดสวิตช์ด้านบนเพื่อให้แอปจับสัญญาณปุ่มกด/ปากกาได้ตลอดเวลาแม้จอดับ"
-            binding.switchBackgroundService.isChecked = false
+            binding.tvServiceStatusDesc.text =
+                "เปิดสวิตช์มุมขวาบนเพื่อรันเรดาร์และรับคำสั่งปุ่มกดตลอด 24/7 แม้ปิดหน้าจอ"
         }
     }
 
-    private fun isServiceRunning(): Boolean {
-        return BluetoothBackgroundService.isRunning
+    private fun setServiceSwitchSilently(checked: Boolean) {
+        if (binding.switchBackgroundService.isChecked == checked) return
+        isUpdatingSwitchProgrammatically = true
+        binding.switchBackgroundService.isChecked = checked
+        isUpdatingSwitchProgrammatically = false
+    }
+
+    private fun refreshSystemStatusBadges() {
+        val locationOn = PermissionHelper.isLocationServiceEnabled(this)
+        binding.cardLocationWarning.visibility = if (locationOn) View.GONE else View.VISIBLE
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager
+            val exempted = pm?.isIgnoringBatteryOptimizations(packageName) == true
+            binding.btnIgnoreBatteryOpt.text = if (exempted) {
+                "✓ ปลดล็อกแบตเตอรี่ HyperOS เรียบร้อยแล้ว"
+            } else {
+                "ปลดล็อกแบตเตอรี่ HyperOS (ป้องกันระบบสั่งปิด)"
+            }
+        }
+
+        val a11yEnabled = UniversalAccessibilityService.isEnabledInSettings(this)
+        binding.btnAccessibilityBridge.text = if (a11yEnabled) {
+            "✓ เปิดสิทธิ์ควบคุมข้ามแอป (Accessibility) แล้ว"
+        } else {
+            "เปิดสิทธิ์ควบคุมข้ามแอป (เลื่อนหน้าจอ / รับปุ่ม HID)"
+        }
     }
 
     private fun requestBatteryOptimizationExemption() {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
-            val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-            if (!pm.isIgnoringBatteryOptimizations(packageName)) {
+            val pm = getSystemService(Context.POWER_SERVICE) as? PowerManager
+            if (pm?.isIgnoringBatteryOptimizations(packageName) != true) {
                 try {
                     val intent = Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
                         data = Uri.parse("package:$packageName")
                     }
                     startActivity(intent)
-                } catch (e: Exception) {
-                    val intent = Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
-                    startActivity(intent)
+                } catch (_: Exception) {
+                    startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
                 }
             } else {
-                Toast.makeText(this, "แอปได้รับการยกเว้นการประหยัดแบตเตอรี่เรียบร้อยแล้ว", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "ปลดล็อกการประหยัดแบตเตอรี่เรียบร้อยแล้ว", Toast.LENGTH_SHORT).show()
             }
         }
+    }
+
+    private fun openAccessibilitySettings() {
+        Toast.makeText(
+            this,
+            "เลือก 'แอปที่ดาวน์โหลด' -> 'Universal BT Companion' แล้วกดเปิดใช้งาน",
+            Toast.LENGTH_LONG
+        ).show()
+        try {
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun registerServiceReceiver() {
+        if (receiverRegistered) return
+        val filter = IntentFilter().apply {
+            addAction(BluetoothBackgroundService.BROADCAST_EVENT)
+            addAction(BluetoothBackgroundService.BROADCAST_DEVICES_UPDATED)
+        }
+        ContextCompat.registerReceiver(
+            this,
+            serviceReceiver,
+            filter,
+            ContextCompat.RECEIVER_NOT_EXPORTED
+        )
+        receiverRegistered = true
+    }
+
+    private fun unregisterServiceReceiver() {
+        if (!receiverRegistered) return
+        try {
+            unregisterReceiver(serviceReceiver)
+        } catch (_: Exception) {
+        }
+        receiverRegistered = false
     }
 
     private fun appendLog(msg: String) {
         val time = timeFormatter.format(Date())
         val current = binding.tvEventLog.text.toString()
-        val newText = "[$time] $msg\n$current".take(3000)
+        val newText = "[$time] $msg\n$current".take(3600)
         binding.tvEventLog.text = newText
     }
 }

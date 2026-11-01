@@ -2,39 +2,39 @@
 package com.sdwinnie.universalbluetooth
 
 import android.bluetooth.BluetoothDevice
-import kotlin.math.pow
 
 /**
- * Represents a discovered Bluetooth / BLE peripheral with signal metrics.
+ * Represents any discovered BLE, Classic, Dual-Mode, or Paired Bluetooth peripheral.
  */
 data class BluetoothDeviceModel(
-    val device: BluetoothDevice,
-    val name: String,
     val address: String,
+    var name: String,
     var rssi: Int,
+    var txPower: Int? = null,
+    var deviceType: Int = BluetoothDevice.DEVICE_TYPE_UNKNOWN,
+    var isBonded: Boolean = false,
+    var isConnected: Boolean = false,
     var isConnectable: Boolean = true,
     var lastSeenMs: Long = System.currentTimeMillis()
 ) {
-    /**
-     * Estimates distance in meters using the standard Log-Distance Path Loss Model:
-     * Distance = 10 ^ ((Measured Power - RSSI) / (10 * N))
-     * where Measured Power ~ -59 dBm at 1m, and N (path loss exponent) ~ 2.2
-     */
-    fun getEstimatedDistanceMeters(): Double {
-        if (rssi == 0) return -1.0
-        val measuredPower = -59.0
-        val n = 2.2
-        val ratio = (measuredPower - rssi) / (10.0 * n)
-        val dist = 10.0.pow(ratio)
-        return (Math.round(dist * 10.0) / 10.0).coerceAtLeast(0.1)
-    }
+    fun getEstimatedDistanceMeters(): Double =
+        BluetoothSignalAnalyzer.estimateDistanceMeters(rssi, txPower)
 
-    /**
-     * Returns true if device is within [maxMeters] (5m or 10m).
-     */
     fun isWithinDistance(maxMeters: Double): Boolean {
+        if (isConnected) return true
         if (maxMeters <= 0.0) return true
         val dist = getEstimatedDistanceMeters()
-        return dist in 0.0..maxMeters
+        if (dist < 0.0) return true
+        return dist <= maxMeters
+    }
+
+    fun getTransportLabel(): String {
+        val base = when (deviceType) {
+            BluetoothDevice.DEVICE_TYPE_CLASSIC -> "Classic"
+            BluetoothDevice.DEVICE_TYPE_DUAL -> "Dual (BLE+Classic)"
+            BluetoothDevice.DEVICE_TYPE_LE -> "BLE"
+            else -> "Bluetooth"
+        }
+        return if (isBonded) "$base • จับคู่แล้ว" else base
     }
 }

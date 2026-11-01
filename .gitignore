@@ -1,9 +1,14 @@
-﻿# Gradle
+# Gradle
 .gradle/
 build/
 app/build/
 
-# Local
+# Keystores & Local config
+keystore/
+*.jks
+*.keystore
+*.apk
+*.idsig
 local.properties
 .idea/
 *.iml
