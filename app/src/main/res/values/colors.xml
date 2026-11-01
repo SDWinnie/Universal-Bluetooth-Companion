@@ -1,0 +1,15 @@
+<resources>
+    <color name="primary">#1E88E5</color>
+    <color name="primary_dark">#1565C0</color>
+    <color name="accent">#00E676</color>
+    <color name="background">#121212</color>
+    <color name="surface">#1E1E1E</color>
+    <color name="surface_variant">#2C2C2C</color>
+    <color name="text_primary">#FFFFFF</color>
+    <color name="text_secondary">#B0B0B0</color>
+    <color name="connected_green">#00E676</color>
+    <color name="disconnected_red">#FF5252</color>
+    <color name="signal_strong">#00E676</color>
+    <color name="signal_medium">#FFD600</color>
+    <color name="signal_weak">#FF5252</color>
+</resources>

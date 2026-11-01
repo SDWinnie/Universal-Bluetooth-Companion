@@ -1,0 +1,20 @@
+<resources>
+    <string name="app_name">Universal BT Companion</string>
+    <string name="service_running_title">Universal BT Companion กำลังทำงาน</string>
+    <string name="service_running_desc">ตรวจจับและเชื่อมต่ออุปกรณ์บลูทูธเบื้องหลัง</string>
+    <string name="btn_start_service">เริ่มทำงานเบื้องหลัง (Start Service)</string>
+    <string name="btn_stop_service">หยุดทำงานเบื้องหลัง (Stop Service)</string>
+    <string name="scan_title">ตรวจจับอุปกรณ์ในระยะ (Radar)</string>
+    <string name="btn_scan">สแกนหาอุปกรณ์ (Scan)</string>
+    <string name="btn_stop_scan">หยุดสแกน (Stop)</string>
+    <string name="status_disconnected">ยังไม่ได้เชื่อมต่ออุปกรณ์</string>
+    <string name="status_connecting">กำลังเชื่อมต่อ...</string>
+    <string name="status_connected">เชื่อมต่อแล้ว</string>
+    <string name="range_filter_label">ตัวกรองระยะสัญญาณ:</string>
+    <string name="range_5m">ระยะใกล้ (5 เมตร)</string>
+    <string name="range_10m">ระยะกลาง (10 เมตร)</string>
+    <string name="range_all">ทั้งหมด (All Range)</string>
+    <string name="action_undo">ส่งคำสั่ง: ย้อนกลับ (Undo)</string>
+    <string name="action_camera">ส่งคำสั่ง: ถ่ายภาพ (Shutter)</string>
+    <string name="action_media">ส่งคำสั่ง: เล่น/หยุดเพลง (Media)</string>
+</resources>
